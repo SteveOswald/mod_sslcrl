@@ -99,7 +99,7 @@ static const char g_revision[] = "1.11_SteveOswald";
 #define SSLCRL_ISDEBUG(s) s->loglevel >= APLOG_DEBUG
 #endif
 
-#undef SSLCRL_DISABLE_DEBUG
+#define SSLCRL_DISABLE_DEBUG 1
 
 /************************************************************************
  * structures
