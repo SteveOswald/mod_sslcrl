@@ -34,16 +34,10 @@ static const char g_revision[] = "1.11_SteveOswald";
 /************************************************************************
  * Includes
  ***********************************************************************/
-
-
 #ifdef _WIN32
-
 #include <Windows.h>
-
 #else
-
 #include <unistd.h>
-
 #endif
 
 
@@ -105,7 +99,7 @@ static const char g_revision[] = "1.11_SteveOswald";
 #define SSLCRL_ISDEBUG(s) s->loglevel >= APLOG_DEBUG
 #endif
 
-#undef SSLCRL_DISABLE_DEBUG 1
+#undef SSLCRL_DISABLE_DEBUG
 
 /************************************************************************
  * structures
@@ -174,44 +168,6 @@ static APR_OPTIONAL_FN_TYPE(ssl_is_https) *sslcrl_is_https = NULL;
  * private
  ***********************************************************************/
 
-static apr_status_t sslcrl_download_crl(sslcrl_config_t *sconf, const char *host, int port, const char *url, char **body, int *body_len)
-{
-	apr_status_t rv;
-	apr_pool_t *mp;
-	apr_socket_t *s;
-
-	apr_initialize();
-	apr_pool_create(&mp, NULL);
-
-	rv = sslcrl_download_crl_connect(&s, mp, host, port);
-	if (rv != APR_SUCCESS) {
-		char errbuf[256];
-		apr_strerror(rv, errbuf, sizeof(errbuf));
-
-		*body = apr_pstrcat(mp, "Error: ", errbuf, NULL);
-
-		apr_terminate();
-		return rv;
-	}
-
-	rv = sslcrl_download_crl_send_request(s, url, host, mp, body, body_len);
-	if (rv != APR_SUCCESS) {
-		char errbuf[256];
-		apr_strerror(rv, errbuf, sizeof(errbuf));
-
-		*body = apr_pstrcat(mp, "Error: ", errbuf, NULL);
-
-		apr_terminate();
-		return rv;
-	}
-
-	apr_socket_close(s);
-	apr_pool_clear(mp);
-	apr_terminate();
-
-	return APR_SUCCESS;
-}
-
 /**
 * Connect to the remote host
 */
@@ -253,7 +209,7 @@ static apr_status_t sslcrl_download_crl_connect(apr_socket_t **sock, apr_pool_t 
 * Send a request as a simple HTTP request protocol.
 * Write the received response to the standard output until the EOF.
 */
-static apr_status_t sslcrl_download_crl_send_request(apr_socket_t *sock, const char *filepath, const char *host, apr_pool_t *mp, char **body, int *body_len)
+static apr_status_t sslcrl_download_crl_send_request(apr_socket_t *sock, const char *filepath, const char *host, apr_pool_t *mp, char **body)
 {
 	apr_status_t rv;
 	const char *req_hdr = apr_pstrcat(mp, "GET ", filepath, " HTTP/1.1", CRLF, "Host: ", host, CRLF, CRLF, NULL);
@@ -267,7 +223,7 @@ static apr_status_t sslcrl_download_crl_send_request(apr_socket_t *sock, const c
 
 	while (1) {
 		char buf[4096];
-		apr_size_t len = sizeof(buf);
+		len = sizeof(buf);
 
 		rv = apr_socket_recv(sock, buf, &len);
 		if (rv == APR_EOF || len == 0) {
@@ -279,11 +235,47 @@ static apr_status_t sslcrl_download_crl_send_request(apr_socket_t *sock, const c
 	}
 
 	*body = output;
-	*body_len = strlen(output);
 
 	return rv;
 }
 
+static apr_status_t sslcrl_download_crl(const char *host, int port, const char *url, char **body)
+{
+	apr_status_t rv;
+	apr_pool_t *mp;
+	apr_socket_t *s;
+
+	apr_initialize();
+	apr_pool_create(&mp, NULL);
+
+	rv = sslcrl_download_crl_connect(&s, mp, host, port);
+	if (rv != APR_SUCCESS) {
+		char errbuf[256];
+		apr_strerror(rv, errbuf, sizeof(errbuf));
+
+		*body = apr_pstrcat(mp, "Error: ", errbuf, NULL);
+
+		apr_terminate();
+		return rv;
+	}
+
+	rv = sslcrl_download_crl_send_request(s, url, host, mp, body);
+	if (rv != APR_SUCCESS) {
+		char errbuf[256];
+		apr_strerror(rv, errbuf, sizeof(errbuf));
+
+		*body = apr_pstrcat(mp, "Error: ", errbuf, NULL);
+
+		apr_terminate();
+		return rv;
+	}
+
+	apr_socket_close(s);
+	apr_pool_clear(mp);
+	apr_terminate();
+
+	return APR_SUCCESS;
+}
 
 
 /**
@@ -985,7 +977,6 @@ static char *sslcrl_req(apr_pool_t *pool, server_rec *s, sslcrl_config_t *sconf,
   char *hostname = parsed_uri->hostname;
   char *path = parsed_uri->path;
   char *body = NULL;
-  int body_len = 0;
   char *buf = NULL;
 
   if(strcasecmp(parsed_uri->scheme, "https") == 0) {
@@ -1001,7 +992,7 @@ static char *sslcrl_req(apr_pool_t *pool, server_rec *s, sslcrl_config_t *sconf,
     path = apr_pstrcat(pool, path, "?", parsed_uri->query, NULL);
   }
 
-  if (sslcrl_download_crl(sconf, hostname, port, path, &body, &body_len) != APR_SUCCESS) {
+  if (sslcrl_download_crl(hostname, port, path, &body) != APR_SUCCESS) {
 	  *err = apr_psprintf(pool, "Failed to download CRL from %s. (%s)", hostname, body);
 	  return NULL;
   }
