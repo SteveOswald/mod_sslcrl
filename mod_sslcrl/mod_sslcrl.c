@@ -28,14 +28,23 @@
 /************************************************************************
  * Version
  ***********************************************************************/
-static const char revision[] = "$Id: mod_sslcrl.c,v 1.81 2016/06/18 14:51:45 pbuchbinder Exp $";
-static const char g_revision[] = "1.10";
+static const char revision[] = "$ mod_sslcrl.c 2018/07/25 11:36:35 SteveOswald $";
+static const char g_revision[] = "1.11_SteveOswald";
 
 /************************************************************************
  * Includes
  ***********************************************************************/
 
+
+#ifdef _WIN32
+
 #include <Windows.h>
+
+#else
+
+#include <unistd.h>
+
+#endif
 
 
 /* openssl */
