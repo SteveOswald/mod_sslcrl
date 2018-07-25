@@ -534,7 +534,7 @@ static int sslcrl_check_cert(request_rec *r, sslcrl_config_t *sconf, X509 *cert)
                     SSLCRL_LOG_PFX(035)"signature algorithm '%s' of"
                     " certificate [%s] is not allowed",
                     sigAlg, cp);
-      apr_table_set(r->notes, "error-notes", "mod_sslcrl(035)");
+      apr_table_set(r->notes, "error-notes", "");
       OPENSSL_free(cp);
       return HTTP_FORBIDDEN;
     }
@@ -577,7 +577,7 @@ static int sslcrl_check_cert(request_rec *r, sslcrl_config_t *sconf, X509 *cert)
         ap_log_rerror(APLOG_MARK, APLOG_ERR, 0, r,
                       SSLCRL_LOG_PFX(034)"certificate with serial %ld has been revoked"
                       " (per CRL from issuer '%s')", serial, cp);
-        apr_table_set(r->notes, "error-notes", "mod_sslcrl(034)");
+        apr_table_set(r->notes, "error-notes", "");
         OPENSSL_free(cp);
         status = HTTP_FORBIDDEN;
         break;
@@ -648,7 +648,7 @@ static int sslcrl_check_ca(request_rec *r, sslcrl_config_t *sconf, X509 *cert) {
       ap_log_rerror(APLOG_MARK, APLOG_ERR, 0, r,
                     SSLCRL_LOG_PFX(031)"invalid signature on CRL (%s)", cp);
       OPENSSL_free(cp);
-      apr_table_set(r->notes, "error-notes", "mod_sslcrl(031)");
+      apr_table_set(r->notes, "error-notes", "");
       status = HTTP_FORBIDDEN;
     } else {
       rc = X509_cmp_current_time(X509_CRL_get_nextUpdate(crl));
@@ -656,7 +656,7 @@ static int sslcrl_check_ca(request_rec *r, sslcrl_config_t *sconf, X509 *cert) {
         char *cp = X509_NAME_oneline(subject, NULL, 0);
         ap_log_rerror(APLOG_MARK, APLOG_ERR, 0, r,
                       SSLCRL_LOG_PFX(032)"found CRL has invalid nextUpdate field (%s)", cp);
-        apr_table_set(r->notes, "error-notes", "mod_sslcrl(032)");
+        apr_table_set(r->notes, "error-notes", "");
         OPENSSL_free(cp);
         status = HTTP_FORBIDDEN;
       }
@@ -665,7 +665,7 @@ static int sslcrl_check_ca(request_rec *r, sslcrl_config_t *sconf, X509 *cert) {
         ap_log_rerror(APLOG_MARK, APLOG_ERR, 0, r,
                       SSLCRL_LOG_PFX(033)"found CRL is expired - "
                       "revoking all certificates until you get updated CRL (%s)", cp);
-        apr_table_set(r->notes, "error-notes", "mod_sslcrl(033)");
+        apr_table_set(r->notes, "error-notes", "");
         OPENSSL_free(cp);
         status = HTTP_FORBIDDEN;
       }            
@@ -763,7 +763,7 @@ static int sslcrl_check(request_rec *r, sslcrl_config_t *sconf, const char *pem)
     ap_log_rerror(APLOG_MARK, APLOG_ERR, 0, r,
                   SSLCRL_LOG_PFX(030)"failed to read client certificate (%d)",
                   HTTP_INTERNAL_SERVER_ERROR);
-    apr_table_set(r->notes, "error-notes", "mod_sslcrl(030)");
+    apr_table_set(r->notes, "error-notes", "");
     return HTTP_INTERNAL_SERVER_ERROR;
   } else {
     apr_pool_t *cpool;
