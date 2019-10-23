@@ -613,9 +613,11 @@ static int sslcrl_check_cert(request_rec *r, sslcrl_config_t *sconf, X509 *cert)
 
 #ifdef OPENSSL_1_1_1
 	const X509_ALGOR *sig_alg = X509_get0_tbs_sigalg(cert);
+	OBJ_obj2txt(sigAlg, sizeof(sigAlg), sig_alg->algorithm, 0);
+#else
+	OBJ_obj2txt(sigAlg, sizeof(sigAlg), cert->sig_alg->algorithm, 0);
 #endif
 
-    OBJ_obj2txt(sigAlg, sizeof(sigAlg), cert->sig_alg->algorithm, 0);
     if(apr_table_get(sconf->signaturAlgorithms, sigAlg) == NULL) {
       char *cp = X509_NAME_oneline(subject, NULL, 0);
       ap_log_rerror(APLOG_MARK, APLOG_ERR, 0, r,
