@@ -40,10 +40,17 @@ static const char g_revision[] = "1.11_SteveOswald";
 #include <unistd.h>
 #endif
 
+#define OPENSSL_1_1_1 1
+
 
 /* openssl */
-#include <openssl/pem.h>
 #include <openssl/x509.h>
+
+#ifdef OPENSSL_1_1_1
+#include <openssl/x509v3.h>
+#endif
+
+#include <openssl/pem.h>
 #include <openssl/ssl.h>
 
 /* apache */
@@ -133,6 +140,11 @@ typedef struct {
   int failclose;
   apr_interval_time_t interval;
   apr_table_t *chains;
+
+#ifdef OPENSSL_1_1_1
+  apr_pool_t *chains_pool;
+#endif
+
   apr_table_t *contenttypes;
   char *headername;
   char *headervalue;
@@ -328,7 +340,12 @@ static sslcrl_shm_t *sslcrl_get_shm(apr_pool_t *ppool, sslcrl_config_t *sconf) {
  * debug only - logs the content of the loaded CRL store
  */
 static void sslcrl_dumpcrl(server_rec *s, const char *cpFile) {
+#ifdef OPENSSL_1_1_1
+  BIO *in = BIO_new(BIO_s_file());
+#else
   BIO *in = BIO_new(BIO_s_file_internal());
+#endif
+  
   BIO_read_filename(in, cpFile);
   ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, s,
                "child %d - load CRL store '%s'",
@@ -378,6 +395,16 @@ static void sslcrl_dumpstore(server_rec * s, const char *cpFile) {
     }
     sk_X509_NAME_free(sk);
   }
+
+#ifdef OPENSSL_1_1_1
+  else {
+	  ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, s,
+		  "child %d ==> Failed to load CA certificate(s) from '%s'",
+		  getpid(),
+		  cpFile);
+  }
+#endif
+
 }
 #endif
 
@@ -390,7 +417,13 @@ static void sslcrl_dumpstore(server_rec * s, const char *cpFile) {
 static X509_STORE *sslcrl_X509_STORE_create_path(server_rec *s, const char *cpPath) {
   X509_STORE *pStore;
   X509_LOOKUP *pLookup;
+
+#ifdef OPENSSL_1_1_1
+  int rv = 0;
+#else
   int rv = 1;
+#endif
+
   if (cpPath == NULL) {
     return NULL;
   }
@@ -443,7 +476,13 @@ static X509_STORE *sslcrl_X509_STORE_create(server_rec * s, const char *cpFile,
                                             int crl) {
   X509_STORE *pStore;
   X509_LOOKUP *pLookup;
+
+#ifdef OPENSSL_1_1_1
+  int rv = 0;
+#else
   int rv = 1;
+#endif
+
   if(cpFile == NULL) {
     return NULL;
   }
@@ -472,6 +511,44 @@ static X509_STORE *sslcrl_X509_STORE_create(server_rec * s, const char *cpFile,
   return rv == 1 ? pStore : NULL;
 }
 
+#ifdef OPENSSL_1_1_1
+/**
+ * Method to fetch a CRL from the CRL store.
+ *
+ * @param s
+ * @param pool To register cleanup
+ * @param pStore CRL store
+ * @param nType Object type to search (X509_LU_CRL)
+ * @param pName Name of the object (either issuer or subject).
+ * @return
+ */
+static X509_OBJECT *sslcrl_X509_STORE_lookup(server_rec *s, apr_pool_t *pool,
+	X509_STORE *pStore, int nType,
+	X509_NAME *pName) {
+	X509_STORE_CTX *pStoreCtx;
+	X509_OBJECT *pObj;
+	pStoreCtx = X509_STORE_CTX_new();
+	if (!X509_STORE_CTX_init(pStoreCtx, pStore, NULL, NULL)) {
+		ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, s, "unable to init store");
+		return NULL;
+	}
+	pObj = X509_STORE_CTX_get_obj_by_subject(pStoreCtx, nType, pName);
+	X509_STORE_CTX_free(pStoreCtx);
+	if (SSLCRL_ISDEBUG(s)) {
+		char *cp = X509_NAME_oneline(pName, NULL, 0);
+		ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, s,
+			"%s store loockup forb [%s]: %s",
+			nType == X509_LU_CRL ? "CRL" : "certificate",
+			cp, pObj == NULL ? "FAILURE" : "SUCCESS");
+		OPENSSL_free(cp);
+	}
+	if (pObj) {
+		apr_pool_cleanup_register(pool, (void*)pObj, (int(*)(void*))X509_OBJECT_free,
+			apr_pool_cleanup_null);
+	}
+	return pObj;
+}
+#else
 /**
  * Method to fetch a CRL from the CRL store.
  *
@@ -481,16 +558,16 @@ static X509_STORE *sslcrl_X509_STORE_create(server_rec * s, const char *cpFile,
  * @param pObj Object to store result to
  * @return
  */
-
 static int sslcrl_X509_STORE_lookup(X509_STORE *pStore, int nType,
-                                    X509_NAME *pName, X509_OBJECT *pObj) {
-  X509_STORE_CTX pStoreCtx;
-  int rc;
-  X509_STORE_CTX_init(&pStoreCtx, pStore, NULL, NULL);
-  rc = X509_STORE_get_by_subject(&pStoreCtx, nType, pName, pObj);
-  X509_STORE_CTX_cleanup(&pStoreCtx);
-  return rc;
+	X509_NAME *pName, X509_OBJECT *pObj) {
+	X509_STORE_CTX pStoreCtx;
+	int rc;
+	X509_STORE_CTX_init(&pStoreCtx, pStore, NULL, NULL);
+	rc = X509_STORE_get_by_subject(&pStoreCtx, nType, pName, pObj);
+	X509_STORE_CTX_cleanup(&pStoreCtx);
+	return rc;
 }
+#endif
 
 /**
  * Sessionid, subject and issuer which is used to recognize a cache entry
@@ -518,7 +595,13 @@ static char *sslcrl_sid(request_rec *r) {
 static int sslcrl_check_cert(request_rec *r, sslcrl_config_t *sconf, X509 *cert) {
   int status = DECLINED;
   X509_CRL *crl = NULL;
+
+#ifdef OPENSSL_1_1_1
+  X509_OBJECT *obj = NULL;
+#else
   X509_OBJECT *obj = apr_pcalloc(r->pool, sizeof(X509_OBJECT));
+#endif
+
   X509_NAME *subject = NULL;
   X509_NAME *issuer = NULL;
 
@@ -527,6 +610,11 @@ static int sslcrl_check_cert(request_rec *r, sslcrl_config_t *sconf, X509 *cert)
 
    if(sconf->signaturAlgorithms != NULL) {
     char sigAlg[256];
+
+#ifdef OPENSSL_1_1_1
+	const X509_ALGOR *sig_alg = X509_get0_tbs_sigalg(cert);
+#endif
+
     OBJ_obj2txt(sigAlg, sizeof(sigAlg), cert->sig_alg->algorithm, 0);
     if(apr_table_get(sconf->signaturAlgorithms, sigAlg) == NULL) {
       char *cp = X509_NAME_oneline(subject, NULL, 0);
@@ -549,6 +637,13 @@ static int sslcrl_check_cert(request_rec *r, sslcrl_config_t *sconf, X509 *cert)
   apr_global_mutex_lock(sconf->lock);                   /* >@CRT2 */
   crl = NULL;
   if(sconf->crl) {
+#ifdef OPENSSL_1_1_1
+	  apr_pool_t *cpool;
+	  apr_pool_create(&cpool, r->pool);
+	  if ((obj = sslcrl_X509_STORE_lookup(r->server, cpool, sconf->crl, X509_LU_CRL, issuer)) != NULL) {
+		  crl = X509_OBJECT_get0_X509_CRL(obj);
+	  }
+#else
     if(sslcrl_X509_STORE_lookup(sconf->crl, X509_LU_CRL, issuer, obj) > 0) {
       apr_pool_t *cpool;
       apr_pool_create(&cpool, r->pool);
@@ -556,6 +651,7 @@ static int sslcrl_check_cert(request_rec *r, sslcrl_config_t *sconf, X509 *cert)
       apr_pool_cleanup_register(cpool, (void*)obj, (int(*)(void*))X509_OBJECT_free_contents,
                                 apr_pool_cleanup_null);
     }
+#endif
   }
   if(crl) {
     int i;
@@ -570,7 +666,13 @@ static int sslcrl_check_cert(request_rec *r, sslcrl_config_t *sconf, X509 *cert)
     }
     for(i = 0; i < n; i++) {
       X509_REVOKED *revoked = sk_X509_REVOKED_value(X509_CRL_get_REVOKED(crl), i);
+
+#ifdef OPENSSL_1_1_1
+	  const ASN1_INTEGER *sn = X509_REVOKED_get0_serialNumber(revoked);
+#else
       ASN1_INTEGER *sn = revoked->serialNumber;
+#endif
+
       if(!ASN1_INTEGER_cmp(sn, X509_get_serialNumber(cert))) {
         char *cp = X509_NAME_oneline(issuer, NULL, 0);
         long serial = ASN1_INTEGER_get(sn);
@@ -613,8 +715,14 @@ static int sslcrl_check_cert(request_rec *r, sslcrl_config_t *sconf, X509 *cert)
 static int sslcrl_check_ca(request_rec *r, sslcrl_config_t *sconf, X509 *cert) {
   int status = DECLINED;
   X509_CRL *crl = NULL;
+
+#ifdef OPENSSL_1_1_1
+  X509_OBJECT *obj = NULL;
+  X509_NAME *subject = X509_get_subject_name(cert);
+#else
   X509_OBJECT *obj = apr_pcalloc(r->pool, sizeof(X509_OBJECT));
   X509_NAME *subject = NULL;
+#endif
   
   subject = X509_get_subject_name(cert);
   if(SSLCRL_ISDEBUG(r->server)) {
@@ -626,6 +734,13 @@ static int sslcrl_check_ca(request_rec *r, sslcrl_config_t *sconf, X509 *cert) {
   apr_global_mutex_lock(sconf->lock);                   /* >@CRT1 */
   crl = NULL;
   if(sconf->crl) {
+#ifdef OPENSSL_1_1_1
+	  apr_pool_t *cpool;
+	  apr_pool_create(&cpool, r->pool);
+	  if ((obj = sslcrl_X509_STORE_lookup(r->server, cpool, sconf->crl, X509_LU_CRL, subject)) != NULL) {
+		  crl = X509_OBJECT_get0_X509_CRL(obj);
+	  }
+#else
     if(sslcrl_X509_STORE_lookup(sconf->crl, X509_LU_CRL, subject, obj) > 0) {
       apr_pool_t *cpool;
       apr_pool_create(&cpool, r->pool);
@@ -633,6 +748,7 @@ static int sslcrl_check_ca(request_rec *r, sslcrl_config_t *sconf, X509 *cert) {
       apr_pool_cleanup_register(cpool, (void*)obj, (int(*)(void*))X509_OBJECT_free_contents,
                                 apr_pool_cleanup_null);
     }
+#endif
   }
   if(crl) {
     EVP_PKEY *pubkey = X509_get_pubkey(cert);
@@ -695,15 +811,29 @@ static int sslcrl_check_chain(request_rec *r, sslcrl_config_t *sconf, X509 *cert
   // search the rigth chain
   for(i = 0; i < apr_table_elts(sconf->chains)->nelts; i++) {
     X509 *cacert = NULL;
+
+#ifdef OPENSSL_1_1_1
+	X509_OBJECT *obj = NULL;
+#else
     X509_OBJECT *obj = apr_pcalloc(r->pool, sizeof(X509_OBJECT));
+#endif
+
     X509_STORE *store = (X509_STORE *)entry[i].val;
     // lookup() function may need a sort on the stack
     apr_global_mutex_lock(sconf->lock);                 /* >@CRT8 */
+
+#ifdef OPENSSL_1_1_1
+	if ((obj = sslcrl_X509_STORE_lookup(r->server, cpool, store, X509_LU_X509, issuer)) != NULL) {
+		cacert = X509_OBJECT_get0_X509(obj);
+	}
+#else
     if(sslcrl_X509_STORE_lookup(store, X509_LU_X509, issuer, obj) > 0) {
       cacert = obj->data.x509;
       apr_pool_cleanup_register(cpool, (void*)obj, (int(*)(void*))X509_OBJECT_free_contents,
                                 apr_pool_cleanup_null);
     }
+#endif
+
     apr_global_mutex_unlock(sconf->lock);               /* <@CRT8 */
     if(cacert) {
       // this is the correct chain...
@@ -721,14 +851,29 @@ static int sslcrl_check_chain(request_rec *r, sslcrl_config_t *sconf, X509 *cert
           // self signed, end of chain
           next = NULL;
         } else {
+
+#ifdef OPENSSL_1_1_1
+		  obj = NULL;
+#else
           obj = apr_pcalloc(r->pool, sizeof(X509_OBJECT));
+#endif
+
           apr_global_mutex_lock(sconf->lock);            /* >@CRT9 */
+
+#ifdef OPENSSL_1_1_1
+		  if ((obj = sslcrl_X509_STORE_lookup(r->server, cpool, store, X509_LU_X509, issuer)) != NULL) {
+			  next = X509_OBJECT_get0_X509(obj);
+		  }
+#else
           if(sslcrl_X509_STORE_lookup(store, X509_LU_X509, issuer, obj) > 0) {
             next = obj->data.x509;
             apr_pool_cleanup_register(cpool, (void*)obj, 
                                       (int(*)(void*))X509_OBJECT_free_contents,
                                       apr_pool_cleanup_null);
-          } else {
+          } 
+#endif
+		  
+		  else {
             next = NULL;
           }
           apr_global_mutex_unlock(sconf->lock);          /* <@CRT9 */
@@ -926,6 +1071,19 @@ static int sslcrl_verify_crl_sig(apr_pool_t *pool, server_rec *s, sslcrl_config_
     for(i = 0; i < apr_table_elts(sconf->chains)->nelts; i++) {
       EVP_PKEY *pkey = NULL;
       X509_STORE *store = (X509_STORE *)entry[i].val;
+
+#ifdef OPENSSL_1_1_1
+	  X509_OBJECT *obj = NULL;
+	  apr_pool_t *cpool;
+	  apr_pool_create(&cpool, pool);
+
+	  apr_global_mutex_lock(sconf->lock);                  /* >@CRT12 */
+	  if ((obj = sslcrl_X509_STORE_lookup(s, cpool, store, X509_LU_X509, issuer)) != NULL) {
+		  X509 *cert = X509_OBJECT_get0_X509(obj);
+		  found = 1;
+		  pkey = X509_get_pubkey(cert);
+	  }
+#else
       X509_OBJECT *obj = apr_pcalloc(pool, sizeof(X509_OBJECT));
       apr_global_mutex_lock(sconf->lock);                  /* >@CRT12 */
       if(sslcrl_X509_STORE_lookup(store, X509_LU_X509, issuer, obj) > 0) {
@@ -936,6 +1094,8 @@ static int sslcrl_verify_crl_sig(apr_pool_t *pool, server_rec *s, sslcrl_config_
                                   apr_pool_cleanup_null);
         pkey = X509_get_pubkey(obj->data.x509);
       }
+#endif
+
       apr_global_mutex_unlock(sconf->lock);                /* <@CRT12 */
       if(pkey) {
         int res = X509_CRL_verify(x, pkey);
@@ -1367,7 +1527,11 @@ static void sslcrl_search_chains(apr_pool_t *pconf, server_rec *bs, sslcrl_confi
                                NULL };
   const char **var;
   if(cpool == NULL) {
+#ifdef OPENSSL_1_1_1
+	apr_pool_create(&cpool, sconf->chains_pool);
+#else
     apr_pool_create(&cpool, apr_table_elts(sconf->chains)->pool);
+#endif
   }
   for(pdir = node; pdir != NULL; pdir = pdir->next) {
     var = path;
@@ -1428,6 +1592,7 @@ static int sslcrl_post_config(apr_pool_t *pconf, apr_pool_t *plog,
   ap_add_version_component(pconf, vs);
   sslcrl_m_ssl_enable = APR_RETRIEVE_OPTIONAL_FN(ssl_proxy_enable);
   sslcrl_m_ssl_disable = APR_RETRIEVE_OPTIONAL_FN(ssl_engine_disable);
+
   sslcrl_var = APR_RETRIEVE_OPTIONAL_FN(ssl_var_lookup);
   sslcrl_is_https = APR_RETRIEVE_OPTIONAL_FN(ssl_is_https);
 
@@ -1486,6 +1651,11 @@ static void *sslcrl_srv_config_create(apr_pool_t *p, server_rec *s) {
   sconf->interval = 86400;
   sconf->cache_file = NULL;
   sconf->chains = apr_table_make(p, 4);
+
+#ifdef OPENSSL_1_1_1
+  sconf->chains_pool = p;
+#endif
+
   sconf->contenttypes = apr_table_make(p, 4);
   sconf->headername = NULL;
   sconf->headervalue = NULL;
@@ -1661,8 +1831,10 @@ const char *sslcrl_enable_cmd(cmd_parms *cmd, void *dcfg, int flag) {
 }
 
 const char *sslcrl_proxyenable_cmd(cmd_parms *cmd, void *dcfg, int flag) {
-  sslcrl_config_t *sconf = ap_get_module_config(cmd->server->module_config,
-                                                &sslcrl_module);
+#if (AP_SERVER_MINORVERSION_NUMBER != 4)
+	sslcrl_config_t *sconf = ap_get_module_config(cmd->server->module_config,
+		&sslcrl_module);
+#endif
   const char *err = ap_check_cmd_context(cmd, GLOBAL_ONLY);
   if (err != NULL) {
     return err;
