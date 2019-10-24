@@ -2,7 +2,8 @@
  * CRL check for SSL client certificates.
  * See http://opensource.adnovum.ch/mod_sslcrl/ for further details.
  *
- * Copyright (C) 2010-2016 Pascal Buchbinder
+ * Copyright (C) 2010-2019 Pascal Buchbinder
+ * Copyright (C) 2018-2019 Steve Oswald
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -28,8 +29,8 @@
 /************************************************************************
  * Version
  ***********************************************************************/
-static const char revision[] = "$ mod_sslcrl.c 2018/07/25 11:36:35 SteveOswald $";
-static const char g_revision[] = "1.11_SteveOswald";
+static const char revision[] = "$ mod_sslcrl.c 2010/10/24 09:17:20 SteveOswald $";
+static const char g_revision[] = "2.1_SteveOswald";
 
 /************************************************************************
  * Includes
@@ -46,8 +47,12 @@ static const char g_revision[] = "1.11_SteveOswald";
 /* openssl */
 #include <openssl/x509.h>
 
-#ifdef OPENSSL_1_1_1
+#if OPENSSL_API_COMPAT >= 0x10100000L
 #include <openssl/x509v3.h>
+#endif
+
+#ifdef _WIN32
+#include <openssl/x509_vfy.h>
 #endif
 
 #include <openssl/pem.h>
@@ -141,7 +146,7 @@ typedef struct {
   apr_interval_time_t interval;
   apr_table_t *chains;
 
-#ifdef OPENSSL_1_1_1
+#if OPENSSL_API_COMPAT >= 0x10100000L
   apr_pool_t *chains_pool;
 #endif
 
@@ -340,7 +345,7 @@ static sslcrl_shm_t *sslcrl_get_shm(apr_pool_t *ppool, sslcrl_config_t *sconf) {
  * debug only - logs the content of the loaded CRL store
  */
 static void sslcrl_dumpcrl(server_rec *s, const char *cpFile) {
-#ifdef OPENSSL_1_1_1
+#if OPENSSL_API_COMPAT >= 0x10100000L
   BIO *in = BIO_new(BIO_s_file());
 #else
   BIO *in = BIO_new(BIO_s_file_internal());
@@ -396,7 +401,7 @@ static void sslcrl_dumpstore(server_rec * s, const char *cpFile) {
     sk_X509_NAME_free(sk);
   }
 
-#ifdef OPENSSL_1_1_1
+#if OPENSSL_API_COMPAT >= 0x10100000L
   else {
 	  ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, s,
 		  "child %d ==> Failed to load CA certificate(s) from '%s'",
@@ -418,7 +423,7 @@ static X509_STORE *sslcrl_X509_STORE_create_path(server_rec *s, const char *cpPa
   X509_STORE *pStore;
   X509_LOOKUP *pLookup;
 
-#ifdef OPENSSL_1_1_1
+#if OPENSSL_API_COMPAT >= 0x10100000L
   int rv = 0;
 #else
   int rv = 1;
@@ -477,7 +482,7 @@ static X509_STORE *sslcrl_X509_STORE_create(server_rec * s, const char *cpFile,
   X509_STORE *pStore;
   X509_LOOKUP *pLookup;
 
-#ifdef OPENSSL_1_1_1
+#if OPENSSL_API_COMPAT >= 0x10100000L
   int rv = 0;
 #else
   int rv = 1;
@@ -511,7 +516,7 @@ static X509_STORE *sslcrl_X509_STORE_create(server_rec * s, const char *cpFile,
   return rv == 1 ? pStore : NULL;
 }
 
-#ifdef OPENSSL_1_1_1
+#if OPENSSL_API_COMPAT >= 0x10100000L
 /**
  * Method to fetch a CRL from the CRL store.
  *
@@ -542,6 +547,7 @@ static X509_OBJECT *sslcrl_X509_STORE_lookup(server_rec *s, apr_pool_t *pool,
 			cp, pObj == NULL ? "FAILURE" : "SUCCESS");
 		OPENSSL_free(cp);
 	}
+
 	if (pObj) {
 		apr_pool_cleanup_register(pool, (void*)pObj, (int(*)(void*))X509_OBJECT_free,
 			apr_pool_cleanup_null);
@@ -596,7 +602,7 @@ static int sslcrl_check_cert(request_rec *r, sslcrl_config_t *sconf, X509 *cert)
   int status = DECLINED;
   X509_CRL *crl = NULL;
 
-#ifdef OPENSSL_1_1_1
+#if OPENSSL_API_COMPAT >= 0x10100000L
   X509_OBJECT *obj = NULL;
 #else
   X509_OBJECT *obj = apr_pcalloc(r->pool, sizeof(X509_OBJECT));
@@ -611,7 +617,7 @@ static int sslcrl_check_cert(request_rec *r, sslcrl_config_t *sconf, X509 *cert)
    if(sconf->signaturAlgorithms != NULL) {
     char sigAlg[256];
 
-#ifdef OPENSSL_1_1_1
+#if OPENSSL_API_COMPAT >= 0x10100000L
 	const X509_ALGOR *sig_alg = X509_get0_tbs_sigalg(cert);
 	OBJ_obj2txt(sigAlg, sizeof(sigAlg), sig_alg->algorithm, 0);
 #else
@@ -639,7 +645,7 @@ static int sslcrl_check_cert(request_rec *r, sslcrl_config_t *sconf, X509 *cert)
   apr_global_mutex_lock(sconf->lock);                   /* >@CRT2 */
   crl = NULL;
   if(sconf->crl) {
-#ifdef OPENSSL_1_1_1
+#if OPENSSL_API_COMPAT >= 0x10100000L
 	  apr_pool_t *cpool;
 	  apr_pool_create(&cpool, r->pool);
 	  if ((obj = sslcrl_X509_STORE_lookup(r->server, cpool, sconf->crl, X509_LU_CRL, issuer)) != NULL) {
@@ -669,7 +675,7 @@ static int sslcrl_check_cert(request_rec *r, sslcrl_config_t *sconf, X509 *cert)
     for(i = 0; i < n; i++) {
       X509_REVOKED *revoked = sk_X509_REVOKED_value(X509_CRL_get_REVOKED(crl), i);
 
-#ifdef OPENSSL_1_1_1
+#if OPENSSL_API_COMPAT >= 0x10100000L
 	  const ASN1_INTEGER *sn = X509_REVOKED_get0_serialNumber(revoked);
 #else
       ASN1_INTEGER *sn = revoked->serialNumber;
@@ -718,7 +724,7 @@ static int sslcrl_check_ca(request_rec *r, sslcrl_config_t *sconf, X509 *cert) {
   int status = DECLINED;
   X509_CRL *crl = NULL;
 
-#ifdef OPENSSL_1_1_1
+#if OPENSSL_API_COMPAT >= 0x10100000L
   X509_OBJECT *obj = NULL;
   X509_NAME *subject = X509_get_subject_name(cert);
 #else
@@ -736,7 +742,7 @@ static int sslcrl_check_ca(request_rec *r, sslcrl_config_t *sconf, X509 *cert) {
   apr_global_mutex_lock(sconf->lock);                   /* >@CRT1 */
   crl = NULL;
   if(sconf->crl) {
-#ifdef OPENSSL_1_1_1
+#if OPENSSL_API_COMPAT >= 0x10100000L
 	  apr_pool_t *cpool;
 	  apr_pool_create(&cpool, r->pool);
 	  if ((obj = sslcrl_X509_STORE_lookup(r->server, cpool, sconf->crl, X509_LU_CRL, subject)) != NULL) {
@@ -769,7 +775,14 @@ static int sslcrl_check_ca(request_rec *r, sslcrl_config_t *sconf, X509 *cert) {
       apr_table_set(r->notes, "error-notes", "");
       status = HTTP_FORBIDDEN;
     } else {
+
+#if OPENSSL_API_COMPAT >= 0x10100000L
+	  rc = X509_cmp_current_time(X509_CRL_get0_nextUpdate(crl));
+#else
       rc = X509_cmp_current_time(X509_CRL_get_nextUpdate(crl));
+#endif
+
+
       if(rc == 0) {
         char *cp = X509_NAME_oneline(subject, NULL, 0);
         ap_log_rerror(APLOG_MARK, APLOG_ERR, 0, r,
@@ -814,7 +827,7 @@ static int sslcrl_check_chain(request_rec *r, sslcrl_config_t *sconf, X509 *cert
   for(i = 0; i < apr_table_elts(sconf->chains)->nelts; i++) {
     X509 *cacert = NULL;
 
-#ifdef OPENSSL_1_1_1
+#if OPENSSL_API_COMPAT >= 0x10100000L
 	X509_OBJECT *obj = NULL;
 #else
     X509_OBJECT *obj = apr_pcalloc(r->pool, sizeof(X509_OBJECT));
@@ -824,7 +837,7 @@ static int sslcrl_check_chain(request_rec *r, sslcrl_config_t *sconf, X509 *cert
     // lookup() function may need a sort on the stack
     apr_global_mutex_lock(sconf->lock);                 /* >@CRT8 */
 
-#ifdef OPENSSL_1_1_1
+#if OPENSSL_API_COMPAT >= 0x10100000L
 	if ((obj = sslcrl_X509_STORE_lookup(r->server, cpool, store, X509_LU_X509, issuer)) != NULL) {
 		cacert = X509_OBJECT_get0_X509(obj);
 	}
@@ -854,7 +867,7 @@ static int sslcrl_check_chain(request_rec *r, sslcrl_config_t *sconf, X509 *cert
           next = NULL;
         } else {
 
-#ifdef OPENSSL_1_1_1
+#if OPENSSL_API_COMPAT >= 0x10100000L
 		  obj = NULL;
 #else
           obj = apr_pcalloc(r->pool, sizeof(X509_OBJECT));
@@ -862,7 +875,7 @@ static int sslcrl_check_chain(request_rec *r, sslcrl_config_t *sconf, X509 *cert
 
           apr_global_mutex_lock(sconf->lock);            /* >@CRT9 */
 
-#ifdef OPENSSL_1_1_1
+#if OPENSSL_API_COMPAT >= 0x10100000L
 		  if ((obj = sslcrl_X509_STORE_lookup(r->server, cpool, store, X509_LU_X509, issuer)) != NULL) {
 			  next = X509_OBJECT_get0_X509(obj);
 		  }
@@ -1061,6 +1074,17 @@ static int sslcrl_verify_crl_sig(apr_pool_t *pool, server_rec *s, sslcrl_config_
     return valid;
   }
   issuer = X509_CRL_get_issuer(x);
+
+#if OPENSSL_API_COMPAT >= 0x10100000L
+  if (X509_CRL_get0_nextUpdate(x)) {
+	  time_t ptime = time(NULL) + sconf->interval;
+	  int n = X509_cmp_time(X509_CRL_get0_nextUpdate(x), &ptime);
+	  if (n < 0) {
+		  ap_log_error(APLOG_MARK, APLOG_WARNING, 0, s,
+			  SSLCRL_LOG_PFX(040)"CRL from '%s' expires before next update", url);
+	  }
+  }
+#else
   if(X509_CRL_get_nextUpdate(x)) {
     time_t ptime = time(NULL) + sconf->interval;
     int n = X509_cmp_time(X509_CRL_get_nextUpdate(x), &ptime);
@@ -1069,12 +1093,14 @@ static int sslcrl_verify_crl_sig(apr_pool_t *pool, server_rec *s, sslcrl_config_
                    SSLCRL_LOG_PFX(040)"CRL from '%s' expires before next update", url);
     }
   }
+#endif
+
   if(issuer) {
     for(i = 0; i < apr_table_elts(sconf->chains)->nelts; i++) {
       EVP_PKEY *pkey = NULL;
       X509_STORE *store = (X509_STORE *)entry[i].val;
 
-#ifdef OPENSSL_1_1_1
+#if OPENSSL_API_COMPAT >= 0x10100000L
 	  X509_OBJECT *obj = NULL;
 	  apr_pool_t *cpool;
 	  apr_pool_create(&cpool, pool);
@@ -1529,7 +1555,7 @@ static void sslcrl_search_chains(apr_pool_t *pconf, server_rec *bs, sslcrl_confi
                                NULL };
   const char **var;
   if(cpool == NULL) {
-#ifdef OPENSSL_1_1_1
+#if OPENSSL_API_COMPAT >= 0x10100000L
 	apr_pool_create(&cpool, sconf->chains_pool);
 #else
     apr_pool_create(&cpool, apr_table_elts(sconf->chains)->pool);
@@ -1654,7 +1680,7 @@ static void *sslcrl_srv_config_create(apr_pool_t *p, server_rec *s) {
   sconf->cache_file = NULL;
   sconf->chains = apr_table_make(p, 4);
 
-#ifdef OPENSSL_1_1_1
+#if OPENSSL_API_COMPAT >= 0x10100000L
   sconf->chains_pool = p;
 #endif
 
