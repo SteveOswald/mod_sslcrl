@@ -1422,7 +1422,13 @@ static int sslcrl_access(request_rec *r) {
             return DECLINED;
           }
         }
+	      
         evar = sslcrl_var(r->pool, r->server, r->connection, r, "SSL_CLIENT_CERT");
+	
+	if (!(evar && evar[0])) {
+	  evar = apr_table_get(r->header_in, "X-ClientCert");
+	}
+
         if(evar && evar[0]) {
           // we have a client cert: perform crl check for this certificate and its chain
           int rc = sslcrl_check(r, sconf, evar);
