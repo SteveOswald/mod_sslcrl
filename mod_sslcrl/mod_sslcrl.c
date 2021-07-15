@@ -1424,7 +1424,7 @@ static int sslcrl_access(request_rec *r) {
         }
 	    
 	// check header-cert first, cause there might be a normal client-cert from the proxy
-	evar = apr_table_get(r->header_in, "X-ClientCert");
+	evar = apr_table_get(r->headers_in, "X-ClientCert");
 	      
 	// if noch header-cert present, try to take normale connection cert
 	if (!(evar && evar[0])) {
