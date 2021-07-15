@@ -3,7 +3,7 @@
  * See http://opensource.adnovum.ch/mod_sslcrl/ for further details.
  *
  * Copyright (C) 2010-2019 Pascal Buchbinder
- * Copyright (C) 2018-2019 Steve Oswald
+ * Copyright (C) 2018-2021 Steve Oswald
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -29,8 +29,8 @@
 /************************************************************************
  * Version
  ***********************************************************************/
-static const char revision[] = "$ mod_sslcrl.c 2010/10/24 09:17:20 SteveOswald $";
-static const char g_revision[] = "2.1_SteveOswald";
+static const char revision[] = "$ mod_sslcrl.c 2021/07/15 16:37:00 SteveOswald $";
+static const char g_revision[] = "2.2_SteveOswald";
 
 /************************************************************************
  * Includes
