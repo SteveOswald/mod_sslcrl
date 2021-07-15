@@ -1422,11 +1422,13 @@ static int sslcrl_access(request_rec *r) {
             return DECLINED;
           }
         }
+	    
+	// check header-cert first, cause there might be a normal client-cert from the proxy
+	evar = apr_table_get(r->header_in, "X-ClientCert");
 	      
-        evar = sslcrl_var(r->pool, r->server, r->connection, r, "SSL_CLIENT_CERT");
-	
+	// if noch header-cert present, try to take normale connection cert
 	if (!(evar && evar[0])) {
-	  evar = apr_table_get(r->header_in, "X-ClientCert");
+	  evar = sslcrl_var(r->pool, r->server, r->connection, r, "SSL_CLIENT_CERT");
 	}
 
         if(evar && evar[0]) {
